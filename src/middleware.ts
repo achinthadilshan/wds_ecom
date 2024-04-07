@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { isValidPassword } from "./lib/isValildPassword";
-import { Flag } from "lucide-react";
 
 export async function middleware(req: NextRequest) {
   if ((await isAuthenticated(req)) === false) {
