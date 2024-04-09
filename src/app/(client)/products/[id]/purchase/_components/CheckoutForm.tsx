@@ -1,5 +1,6 @@
 "use client";
 
+import { userOrderExists } from "@/app/actions/orders";
 import { Button } from "@/components/ui/button";
 import {
   Card,
@@ -12,15 +13,20 @@ import {
 import { formatCurrency } from "@/lib/formatters";
 import {
   Elements,
+  LinkAuthenticationElement,
   PaymentElement,
   useElements,
   useStripe,
 } from "@stripe/react-stripe-js";
 import { loadStripe } from "@stripe/stripe-js";
 import Image from "next/image";
+import Link from "next/link";
+import { redirect, useRouter } from "next/navigation";
+import { FormEvent, useState } from "react";
 
 type CheckoutFormProps = {
   product: {
+    id: string;
     name: string;
     priceInCents: number;
     imagePath: string;
@@ -56,36 +62,112 @@ export function CheckoutForm({ product, clientSecret }: CheckoutFormProps) {
         </div>
       </div>
       <Elements options={{ clientSecret }} stripe={stripePromise}>
-        <Form priceInCents={product.priceInCents} />
+        <Form priceInCents={product.priceInCents} productId={product.id} />
       </Elements>
     </div>
   );
 }
 
-function Form({ priceInCents }: { priceInCents: number }) {
+function Form({
+  priceInCents,
+  productId,
+}: {
+  priceInCents: number;
+  productId: string;
+}) {
   const stripe = useStripe();
   const elements = useElements();
+  const [isLoading, setIsLoading] = useState<boolean>(false);
+  const [errorMessage, setErrorMessage] = useState<string>();
+  const [email, setEmail] = useState<string>();
+  const router = useRouter();
+
+  async function handleSubmit(e: FormEvent) {
+    e.preventDefault();
+
+    if (stripe == null || elements == null || email == null) return;
+
+    setIsLoading(true);
+
+    // check for if the order is existing
+    const orderExist = await userOrderExists(email, productId);
+
+    if (orderExist) {
+      setErrorMessage(
+        "You have already purchased this product. Try downloading it from the My Orders page  "
+      );
+      setIsLoading(false);
+      return;
+    }
+
+    stripe
+      .confirmPayment({
+        elements,
+        confirmParams: {
+          return_url: `${process.env.NEXT_PUBLIC_SERVER_URL}/stripe/purchase-success`,
+        },
+      })
+      .then(({ error }) => {
+        if (error.type === "card_error" || error.type === "validation_error") {
+          setErrorMessage(error.message);
+        } else {
+          setErrorMessage("An unknown error occured.");
+        }
+      })
+      .finally(() => setIsLoading(false));
+  }
+
+  // since stripe is not available for Sri Lanka
+  function bypassStripe(productId: string, email?: string) {
+    if (email?.length == 0) return;
+
+    router.push(
+      `${process.env.NEXT_PUBLIC_SERVER_URL}/stripe/purchase-success?productId=${productId}&email=${email}`
+    );
+  }
 
   return (
-    <form>
-      <Card>
-        <CardHeader>
-          <CardTitle>Checkout</CardTitle>
-          <CardDescription className="text-destructive">Error</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <PaymentElement />
-        </CardContent>
-        <CardFooter>
-          <Button
-            className="w-full"
-            size="lg"
-            disabled={stripe == null || elements == null}
-          >
-            Purchase - {formatCurrency(priceInCents / 100)}
-          </Button>
-        </CardFooter>
-      </Card>
-    </form>
+    <>
+      {/* <form onSubmit={handleSubmit}> */}
+      <form>
+        <Card>
+          <CardHeader>
+            <CardTitle>Checkout</CardTitle>
+            {errorMessage && (
+              <CardDescription className="text-destructive">
+                {errorMessage}
+              </CardDescription>
+            )}
+          </CardHeader>
+          <CardContent>
+            <PaymentElement />
+            <div className="mt-4">
+              <LinkAuthenticationElement
+                onChange={(e) => setEmail(e.value.email)}
+              />
+            </div>
+          </CardContent>
+          <CardFooter>
+            <Button
+              className="w-full"
+              size="lg"
+              disabled={stripe == null || elements == null || isLoading}
+            >
+              {isLoading
+                ? "Purchasing..."
+                : `Purchase - ${formatCurrency(priceInCents / 100)}`}
+            </Button>
+          </CardFooter>
+        </Card>
+      </form>
+      <div className="mt-5">
+        <Button
+          variant="outline"
+          onClick={() => bypassStripe(productId, email)}
+        >
+          Bypass Stripe
+        </Button>
+      </div>
+    </>
   );
 }
